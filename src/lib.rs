@@ -150,213 +150,96 @@ mod tests {
         assert!(r.pull().is_err());
     }
 
+    fn n_to_m(n: usize, m: usize) {
+        let mut r = <Anellus<usize>>::new(n+m); // need enough capacity for the poison pills
+        let stock : usize = 100; 
+        use std::thread::*;
+
+        let mut producers: Vec<JoinHandle<usize>> = Vec::new();
+        let mut consumers: Vec<JoinHandle<usize>> = Vec::new();
+        
+        for _t in 0..n {
+            let mut rr = r.clone();
+            producers.push(spawn(move || -> usize {
+                let mut i = 1;
+                while i <= stock {
+                    i = match rr.push(i) {
+                        Ok(_) => i + 1,
+                        Err(_) => i,
+                    };
+                    yield_now();
+                }
+                0
+            }));
+        }
+
+        for _t in 0..m {
+            let rr = r.clone();
+            consumers.push(spawn(move || -> usize {
+                let mut count: usize = 0;
+                loop {
+                    match rr.pull() {
+                        Ok(x) => {
+                            if 0 == x {
+                                return count;
+                            }
+                            count += 1;
+                        }
+                        Err(_) => {},
+                    };
+                    yield_now();
+                }
+            }));
+        }
+
+        for t in producers {
+            t.join().unwrap();
+        }
+        for _i in 0..m {
+            r.push(0).unwrap();
+        }
+        let mut totalseen = 0;
+        for t in consumers {
+            totalseen += t.join().unwrap();
+        }
+
+        assert_eq!(totalseen, stock*n);
+    }
+
+    #[test]
+    fn ten_to_two() {
+        n_to_m(10,2);
+    }
+
+
     #[test]
     fn one_to_one() {
-        let r = <Anellus<u32>>::new(10); 
-        
-        use std::thread;
-
-        let mut p1 = r.clone();
-        let mut c = r.clone();
-        
-
-        let prod1 = thread::spawn(move || {
-            let mut i = 1;
-            while i < 1001 {
-                i = match p1.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-            }
-        });
-
-        let con = thread::spawn(move || {
-            let mut count: u32;
-            count = 1;
-            while count < 1000 {
-                count = match c.pull() {
-                    Ok(_) => count + 1,
-                    Err(x) => count,
-                };
-                thread::yield_now();
-            }
-        });
-
-        prod1.join().unwrap();
-        let res = con.join();
-
-        assert!(res.is_ok());
+        n_to_m(1,1);
     }
 
     #[test]
     fn many_to_one() {
-        let r = <Anellus<u32>>::new(10); 
-        
-        use std::thread;
-
-        let mut p1 = r.clone();
-        let mut p2 = r.clone();
-        let mut p3 = r.clone();
-        let mut p4 = r.clone();
-        let mut c = r.clone();
-        
-
-        let prod1 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p1.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-               // println!(">>> {:?}",i);
-            }
-        });
-        let prod2 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p2.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-                //println!(">>> {:?}",i);
-            }
-        });
-        let prod3 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p3.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-                //println!(">>> {:?}",i);
-            }
-        });
-        let prod4 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p4.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-                //println!(">>> {:?}",i);
-            }
-        });
-
-        let con = thread::spawn(move || {
-            let mut count: u32;
-            count = 0;
-            while count < 400 {
-                count = match c.pull() {
-                    Ok(_) => count + 1,
-                    Err(x) => count,
-                };
-                thread::yield_now();
-                //println!("<< {:?}", count);
-            }
-        });
-
-        prod1.join().unwrap();
-        prod2.join().unwrap();
-        prod3.join().unwrap();
-        prod4.join().unwrap();
-        let res = con.join();
-
-        assert!(res.is_ok());
+        n_to_m(4,1);
     }
 
 
     #[test]
     fn many_to_many() {
-        let r = <Anellus<u32>>::new(10); 
-        
-        use std::thread;
+        n_to_m(10,5);
+    }
 
-        let mut p1 = r.clone();
-        let mut p2 = r.clone();
-        let mut p3 = r.clone();
-        let mut p4 = r.clone();
-        let mut c1 = r.clone();
-        let mut c2 = r.clone();
-        
+    #[test]
+    fn lots_producers() {
+        n_to_m(100,2);
+    }
 
-        let prod1 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p1.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-            }
-        });
-        let prod2 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p2.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-            }
-        });
-        let prod3 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p3.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-            }
-        });
-        let prod4 = thread::spawn(move || {
-            let mut i = 0;
-            while i < 100 {
-                i = match p4.push(i) {
-                    Ok(_) => i + 1,
-                    Err(_) => i,
-                };
-                thread::yield_now();
-            }
-        });
+    #[test]
+    fn lots_consumers() {
+        n_to_m(2,100);
+    }
 
-        let con1 = thread::spawn(move || {
-            let mut count: u32;
-            count = 0;
-            while count < 200 {
-                count = match c1.pull() {
-                    Ok(_) => count + 1,
-                    Err(x) => count,
-                };
-                thread::yield_now();
-            }
-        });
-
-        let con2 = thread::spawn(move || {
-            let mut count: u32;
-            count = 0;
-            while count < 200 {
-                count = match c2.pull() {
-                    Ok(_) => count + 1,
-                    Err(x) => count,
-                };
-                thread::yield_now();
-            }
-        });
-
-        prod1.join().unwrap();
-        prod2.join().unwrap();
-        prod3.join().unwrap();
-        prod4.join().unwrap();
-        let res1 = con1.join();
-        let res2 = con2.join();
-
-        assert!(res1.is_ok());
-        assert!(res2.is_ok());
+    #[test]
+    fn lots_both() {
+        n_to_m(1000,1000);
     }
 }
