@@ -1,11 +1,15 @@
+#![feature(test)]
+extern crate test;
+
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::cell::UnsafeCell;
+use std::thread;
 
 #[derive(Debug)]
 struct AnellusInner<T: Copy> 
 {
     r: AtomicUsize,
     w: AtomicUsize,
+    ordering: Ordering,
     capacity: usize,
     ring: Vec<T>,
 }
@@ -44,6 +48,7 @@ impl<T: Copy> Anellus<T> {
         let mut res = Box::new(AnellusInner {
             r: AtomicUsize::new(0),
             w: AtomicUsize::new(1),
+            ordering: Ordering::SeqCst,
             capacity: size+2,
             ring: Vec::with_capacity(size+2)
         });
@@ -65,12 +70,12 @@ impl<T: Copy> Anellus<T> {
                 return Err(Errors::Empty);
             }
             value = inner.ring[newr];
-            match inner.r.compare_exchange(prevr, newr, Ordering::SeqCst, Ordering::Relaxed) {
+            match inner.r.compare_exchange(prevr, newr, inner.ordering, Ordering::Relaxed) {
                 Ok(_) => break,
                 Err(_) => {},
             }
         }
-            Ok(value)
+        Ok(value)
     }
 
     pub fn push(&mut self, value: T) -> Result<()> {
@@ -82,7 +87,7 @@ impl<T: Copy> Anellus<T> {
             if neww == prevr {
                 return Err(Errors::Full);
             }
-            match inner.w.compare_exchange(prevw, neww, Ordering::SeqCst, Ordering::Relaxed) {
+            match inner.w.compare_exchange(prevw, neww, inner.ordering, Ordering::Relaxed) {
                 Ok(_) => { 
                     inner.ring[prevw] = value;
                     break;
@@ -126,8 +131,8 @@ mod tests {
     fn can_pull() {
         let mut r : Anellus<u32> = Anellus::new(3); 
     
-        r.push(1);
-        r.push(2);
+        r.push(1).unwrap();
+        r.push(2).unwrap();
         match r.pull() {
             Ok(x) => assert_eq!(x,1),
             Err(x) => panic!("{:?}", x),
@@ -150,20 +155,20 @@ mod tests {
         assert!(r.pull().is_err());
     }
 
-    fn n_to_m(n: usize, m: usize) {
-        let mut r = <Anellus<usize>>::new(n+m); // need enough capacity for the poison pills
-        let stock : usize = 100; 
+    fn n_to_m(n: u16, m: u16) {
+        let mut r = <Anellus<u64>>::new((m+n+32) as usize); // need enough capacity for the poison pills
+        let stock : u32 = 100; 
         use std::thread::*;
 
-        let mut producers: Vec<JoinHandle<usize>> = Vec::new();
-        let mut consumers: Vec<JoinHandle<usize>> = Vec::new();
+        let mut producers: Vec<JoinHandle<u64>> = Vec::new();
+        let mut consumers: Vec<JoinHandle<Vec<u64>>> = Vec::new();
         
-        for _t in 0..n {
+        for t in 0..n {
             let mut rr = r.clone();
-            producers.push(spawn(move || -> usize {
-                let mut i = 1;
+            producers.push(spawn(move || -> u64 {
+                let mut i : u32 = 1;
                 while i <= stock {
-                    i = match rr.push(i) {
+                    i = match rr.push(((t as u64)<<32) + (i as u64)) {
                         Ok(_) => i + 1,
                         Err(_) => i,
                     };
@@ -175,15 +180,15 @@ mod tests {
 
         for _t in 0..m {
             let rr = r.clone();
-            consumers.push(spawn(move || -> usize {
-                let mut count: usize = 0;
+            consumers.push(spawn(move || -> Vec<u64> {
+                let mut values : Vec<u64> = Vec::new();
                 loop {
                     match rr.pull() {
                         Ok(x) => {
                             if 0 == x {
-                                return count;
+                                return values;
                             }
-                            count += 1;
+                            values.push(x);
                         }
                         Err(_) => {},
                     };
@@ -198,12 +203,32 @@ mod tests {
         for _i in 0..m {
             r.push(0).unwrap();
         }
-        let mut totalseen = 0;
+        let mut seenvalues : Vec<Vec<u64>> = Vec::new();
         for t in consumers {
-            totalseen += t.join().unwrap();
+            seenvalues.push(t.join().unwrap());
+        }
+        
+        let mut seenoneach : Vec<u32> = vec![0; n.into()];
+        for values in seenvalues {
+            let mut lastforeach: Vec<u32> = vec![0; n.into()];
+            for v in values {
+                let producer : usize = ((v >> 32) as u32).try_into().unwrap();
+                let counter : u32 = (v % (u32::MAX as u64)).try_into().unwrap();
+                seenoneach[producer] += 1;
+                if counter <= lastforeach[producer] {
+                    panic!("order violation for {} was {} now {}", producer, lastforeach[producer], counter);
+                }
+                lastforeach[producer] = counter;
+            }
         }
 
-        assert_eq!(totalseen, stock*n);
+        let mut totalseen = 0;
+        for t in 0..n {
+            //println!("producer {} : {}", t, seenoneach[t as usize]);
+            totalseen += seenoneach[t as usize];
+        }
+
+        assert_eq!(totalseen, (stock as u32)*(n as u32));
     }
 
     #[test]
@@ -241,5 +266,18 @@ mod tests {
     #[test]
     fn lots_both() {
         n_to_m(1000,1000);
+    }
+
+    #[test]
+    fn ddos() {
+        n_to_m(100,1);
+    }
+
+    use super::*;
+    use test::Bencher;
+    #[allow(soft_unstable)]
+    #[bench]
+    fn strict_order(b: &mut Bencher) {
+        b.iter(|| n_to_m(1000,1));
     }
 }
